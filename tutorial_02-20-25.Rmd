@@ -12,20 +12,88 @@ knitr::opts_chunk$set(echo = TRUE)
 ## by Yasmine Hentati
 ## 2/28/25
 
-Packages: 
-
+## Packages
+All of these are quite straightforward except for tidycensus, for which you'll need an API key. Use the directions under 2.1 [here](https://walker-data.com/census-r/an-introduction-to-tidycensus.html) to get it (just the short section before 2.1.1). Use the skeleton code below.
 ```{r}
-install.packages("pacman")
+install.packages("pacman") # this package just helps us quickly install and load a lot of packages at once 
 pacman::p_load(tidycensus, sf, terra, mapview, tidyr, dplyr, readr, here)
 
+# see above link to get the key and paste it below 
+census_api_key("YOUR KEY HERE",
+               install = TRUE)
+
+Sys.getenv("CENSUS_API_KEY") # this should print your API key back to you 
 ```
 
-First we'll read in our data and turn it into a spatial format R can work with (sf). Here we'll work with the UWIN/Schell Lab East Bay camera trap points (saved as a .csv directly from the first tab of the Master UWIN Bay Area spreadsheet). I like to use UTMs (easting/northing) instead of lat/long, so we'll also convert the points so we can project it properly. 
+## Reading in points 
+First we'll read in our data and turn it into a spatial format R can work with (sf). Here we'll work with the UWIN/Schell Lab East Bay camera trap points (saved as a .csv directly from the first tab of the Master UWIN Bay Area spreadsheet). I like to use UTMs (easting/northing) instead of lat/long, so we'll also convert the points so we can project it in UTMs. 
 
 ```{r}
 
-all_sites <- read_csv(here(""))
+# read in data 
+all_sites <- read_csv(here("eastbay_sites.csv")) %>% 
+  slice (1:72) %>% # keep only rows with data
+  select(1:17) # keep only columns we might need
 
-all_sites <- st_as_sf(all_sites, coords=c("long", "lat"), crs="EPSG:4326")
+# convert the data frame into an sf format using the points columns 
+all_sites <- st_as_sf(all_sites, coords=c("Long", "Lat"), crs="EPSG:4326") #the EPSG string is simply a project code -- 4326 is the code for WGS84, which google maps and other systems use 
+
+# use mapview to look at our sites and make sure everything seems to be in the right place 
+mapview(all_sites) 
+
+
+# transform all_sites to UTM with st_transform 
+all_sites <- all_sites %>% st_transform("EPSG:32611" # EPSG code for UTM zone 11 (california)
+
+# take a look at it again
+mapview(all_sites)
+
+st_crs(all_sites)
 ```
 
+
+
+## Read in housing density data you downloaded 
+```{r}
+
+```
+
+
+## Read in median income data using tidycensus 
+This time, instead of working with a shapefile we downloaded from the Internet, we'll use a nifty R package to download the data for us. Tidycensus uses data from American Community Survey with many different years of data available. The link in the first packages section is a great overall tutorial if you want to learn more.
+```{r}
+
+# load in ACS 2019 variables 
+v19 <- load_variables(2019, "acs5", cache = TRUE)
+
+# now load in shapefile of california census tracts 
+# with median household income as variable of interest
+tractincomeCA <- get_acs(state = "CA", 
+                         geography = "tract", 
+                         variables = c(medincome="B19013_001"), # this is just the code for the med income data, i think i found it in the linked tutorial
+                         geometry = TRUE) 
+
+# take a look at the data set
+glimpse(tractincomeCA)
+
+# now let's only keep census tracts we want so the file isn't huge -- let's do the entire SF bay area in case we need the rest of this data one day
+tractsSF <- tractincomeCA %>% dplyr::filter(substr(GEOID, 1, 5) 
+                                            # these are GEOIDs which represent each county ("06" represents the state of CA) -- these can be found online 
+                                            %in% c("06055", "06041", # napa, marin
+                                                   "06095", "06013", # solano, contra costa 
+                                                   "06001", "06075", # alameda, SF 
+                                                   "06081", "06085")) # san mateo, san clara 
+
+# view as a map 
+mapview(tractsSF)
+
+# now let's write this to a shapefile saved in our directory 
+st_write(tractsSF, here("sf_bay_med_income.shp"),
+         append = FALSE)
+```
+
+## Read in 
+
+
+
+Next time we'll learn how to bring it all together and calculate values for our sites based on the data we read in! 
