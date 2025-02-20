@@ -1,0 +1,31 @@
+---
+title: "schell_lab_R_spatial_tutorial"
+output: html_document
+date: "2025-02-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Schell Lab R Spatial Tutorial
+## by Yasmine Hentati
+## 2/28/25
+
+Packages: 
+
+```{r}
+install.packages("pacman")
+pacman::p_load(tidycensus, sf, terra, mapview, tidyr, dplyr, readr, here)
+
+```
+
+First we'll read in our data and turn it into a spatial format R can work with (sf). Here we'll work with the UWIN/Schell Lab East Bay camera trap points (saved as a .csv directly from the first tab of the Master UWIN Bay Area spreadsheet). I like to use UTMs (easting/northing) instead of lat/long, so we'll also convert the points so we can project it properly. 
+
+```{r}
+
+all_sites <- read_csv(here(""))
+
+all_sites <- st_as_sf(all_sites, coords=c("long", "lat"), crs="EPSG:4326")
+```
+
