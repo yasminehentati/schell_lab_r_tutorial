@@ -16,7 +16,7 @@ knitr::opts_chunk$set(echo = TRUE)
 All of these are quite straightforward except for tidycensus, for which you'll need an API key. Use the directions under 2.1 [here](https://walker-data.com/census-r/an-introduction-to-tidycensus.html) to get it (just the short section before 2.1.1). Use the skeleton code below.
 ```{r}
 install.packages("pacman") # this package just helps us quickly install and load a lot of packages at once 
-pacman::p_load(tidycensus, sf, terra, mapview, tidyr, dplyr, readr, here)
+pacman::p_load(tidycensus, sf, terra, mapview, tidyr, dplyr, readr, here, ggplot2)
 
 # see above link to get the key and paste it below 
 census_api_key("YOUR KEY HERE",
@@ -31,7 +31,7 @@ First we'll read in our data and turn it into a spatial format R can work with (
 ```{r}
 
 # read in data 
-all_sites <- read_csv(here("eastbay_sites.csv")) %>% 
+all_sites <- read_csv(here("data", "eastbay_sites.csv")) %>% 
   slice (1:72) %>% # keep only rows with data
   select(1:17) # keep only columns we might need
 
@@ -41,40 +41,34 @@ all_sites <- st_as_sf(all_sites, coords=c("Long", "Lat"), crs="EPSG:4326") #the 
 # use mapview to look at our sites and make sure everything seems to be in the right place 
 mapview(all_sites) 
 
-
 # transform all_sites to UTM with st_transform 
-all_sites <- all_sites %>% st_transform("EPSG:32611" # EPSG code for UTM zone 11 (california)
+all_sites <- all_sites %>% st_transform("EPSG:32611") # EPSG code for UTM zone 11 (california)
 
 # take a look at it again
 mapview(all_sites)
-
-st_crs(all_sites)
-```
-
-
-
-## Read in housing density data you downloaded 
-```{r}
+st_crs(all_sites) # check out our projection system 
 
 ```
 
 
 ## Read in median income data using tidycensus 
-This time, instead of working with a shapefile we downloaded from the Internet, we'll use a nifty R package to download the data for us. Tidycensus uses data from American Community Survey with many different years of data available. The link in the first packages section is a great overall tutorial if you want to learn more.
+Instead of working with a shapefile we downloaded from the Internet, we'll use a nifty R package to download the data for us. Tidycensus uses data from American Community Survey with many different years of data available. The link in the first packages section is a great overall tutorial if you want to learn more.
 ```{r}
 
 # load in ACS 2019 variables 
 v19 <- load_variables(2019, "acs5", cache = TRUE)
 
-# now load in shapefile of california census tracts 
+# now load in sf  of california census tracts 
 # with median household income as variable of interest
 tractincomeCA <- get_acs(state = "CA", 
                          geography = "tract", 
                          variables = c(medincome="B19013_001"), # this is just the code for the med income data, i think i found it in the linked tutorial
-                         geometry = TRUE) 
+                         geometry = TRUE) %>% 
+  st_transform(crs = "EPSG:32611") # correct projection
 
 # take a look at the data set
 glimpse(tractincomeCA)
+class(tractincomeCA)
 
 # now let's only keep census tracts we want so the file isn't huge -- let's do the entire SF bay area in case we need the rest of this data one day
 tractsSF <- tractincomeCA %>% dplyr::filter(substr(GEOID, 1, 5) 
@@ -88,12 +82,48 @@ tractsSF <- tractincomeCA %>% dplyr::filter(substr(GEOID, 1, 5)
 mapview(tractsSF)
 
 # now let's write this to a shapefile saved in our directory 
-st_write(tractsSF, here("sf_bay_med_income.shp"),
+st_write(tractsSF, here("data", "sf_bay_med_income.shp"),
          append = FALSE)
 ```
 
-## Read in 
 
 
+## Read in housing density data you downloaded 
+This is an example of how to work with a shapefile you downloaded from the Internet. This data is publicly available from the Silvis lab. 
+```{r}
+
+bay_housing <- st_read(here("data", "CA_wui_block_1990_2020_change_v4.shp")) %>% 
+  st_transform(crs = "EPSG:32611")# let's put it in the same projection we're working in 
+
+
+# filter to only bay area counties
+bay_housing <- ca_housing %>% dplyr::filter(substr(BLK20, 1, 5) # this is housing density by block for 2020 
+                                           %in% c("06055", "06041", # same counties as before
+                                                  "06095", "06013",
+                                                  "06001", "06075",
+                                                  "06081", "06085"))
+```
+
+
+## Read in NDVI data 
+Another example of data you downloaded from the internet, but this time from the Schell lab Drive! This NDVI raster layer is at a 30m resolution and was downloaded using code from Google Earth Engine. It is a composite of summer season NDVI in 2020 in the Bay area, with cloud cover removed. 
+```{r}
+
+# read in the raster 
+ndvi_bay <- rast(here("data", "YH_NDVI2020_OACA-30-3857.TIF")) %>% 
+ project("EPSG:32611") # put it in the right proj  -- note that this is a DIFFERENT function than we used for the sfs 
+
+
+
+
+```
+
+## Read in impervious surface data 
+
+```{r}
+
+```
+
+## Let's make some nice plots! 
 
 Next time we'll learn how to bring it all together and calculate values for our sites based on the data we read in! 
