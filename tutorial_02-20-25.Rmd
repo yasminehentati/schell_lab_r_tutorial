@@ -9,16 +9,25 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ### Schell Lab R Spatial Tutorial
-## by Yasmine Hentati
-## 2/28/25
+## Exploring remote sensing, census based and climatic datasets for urban ecology
+### by Diego Ellis Soto and Yasmine Hentati
+### February 25, 2025
+
+This markdown assumes basic knowledge about GIS (e.g. rasters vs shapefiles, points vs lines, raster vs raster stack) and spatial ecology (e.g. issues related to grain size, spatial extent, spatio-temporal scale).
+
+The motivation of this markdown is to provide a basic primer for downloading, annotating, visualizing and summarizing mostly static spatial data and relate it to UWIN camera trap locations in the Bay Area, California.
+
+We'll work on both reading in and saving shapefiles/rasters in your study area, as well as extracting buffers from different layers around study area points (i.e. camera traps). 
+
 
 ## Packages
 All of these are quite straightforward except for tidycensus, for which you'll need an API key. Use the directions under 2.1 [here](https://walker-data.com/census-r/an-introduction-to-tidycensus.html) to get it (just the short section before 2.1.1). Use the skeleton code below.
+
 ```{r}
 install.packages("pacman") # this package just helps us quickly install and load a lot of packages at once 
 pacman::p_load(tidycensus, sf, terra, mapview, tidyr, dplyr, readr, here, ggplot2)
 
-# see above link to get the key and paste it below 
+# see above link to get your tidycensus key and paste it below 
 census_api_key("YOUR KEY HERE",
                install = TRUE)
 
@@ -26,7 +35,10 @@ Sys.getenv("CENSUS_API_KEY") # this should print your API key back to you
 ```
 
 ## Reading in points 
-First we'll read in our data and turn it into a spatial format R can work with (sf). Here we'll work with the UWIN/Schell Lab East Bay camera trap points (saved as a .csv directly from the first tab of the Master UWIN Bay Area spreadsheet). I like to use UTMs (easting/northing) instead of lat/long, so we'll also convert the points so we can project it in UTMs. 
+
+Let's start by loading our UWIN trap camera and visualizing it.
+
+First we'll read in our .csv and turn it into a spatial format R can work with (sf). Here we'll work with the UWIN/Schell Lab East Bay camera trap points (saved as a .csv directly from the first tab of the Master UWIN Bay Area spreadsheet). I like to use WGS84 / UTM projection (easting/northing) instead of ones that use lat/long, so we'll also convert the points so we can project it in UTMs. This will be useful to know if someone provides you with data in a certain projection and you want to change it to another projection.
 
 ```{r}
 
@@ -34,25 +46,32 @@ First we'll read in our data and turn it into a spatial format R can work with (
 all_sites <- read_csv(here("data", "eastbay_sites.csv")) %>% 
   slice (1:72) %>% # keep only rows with data
   select(1:17) # keep only columns we might need
+```
 
+Let's convert this dataframe to a spatial SF object and plot it using mapview.
+```{r}
 # convert the data frame into an sf format using the points columns 
-all_sites <- st_as_sf(all_sites, coords=c("Long", "Lat"), crs="EPSG:4326") #the EPSG string is simply a project code -- 4326 is the code for WGS84, which google maps and other systems use 
+all_sites <- st_as_sf(all_sites, coords=c("Long", "Lat"), crs="EPSG:4326") #the EPSG string is simply a project code -- 4326 is the code for WGS84 lat/long, which google maps and other systems use 
 
 # use mapview to look at our sites and make sure everything seems to be in the right place 
 mapview(all_sites) 
 
 # transform all_sites to UTM with st_transform 
-all_sites <- all_sites %>% st_transform("EPSG:32611") # EPSG code for UTM zone 11 (california)
+all_sites <- all_sites %>% st_transform("EPSG:32611") # EPSG code for WGS84 UTM zone 11 (california)
 
 # take a look at it again
 mapview(all_sites)
 st_crs(all_sites) # check out our projection system 
-
 ```
 
+### Read in median income data using tidycensus 
 
-## Read in median income data using tidycensus 
-Instead of working with a shapefile we downloaded from the Internet, we'll use a nifty R package to download the data for us. Tidycensus uses data from American Community Survey with many different years of data available. The link in the first packages section is a great overall tutorial if you want to learn more.
+Instead of working with a shapefile we downloaded from the Internet, we'll use a nifty R package to download the data for us. Tidycensus uses data from American Community Survey with many different years of data available. 
+
+The US census has hundreds of interesting variables, but some other variables we could explore in the future are income, road networks, racial demographics.
+
+The link in the first packages section above is a great overall tutorial if you want to learn more.
+
 ```{r}
 
 # load in ACS 2019 variables 
@@ -84,11 +103,11 @@ mapview(tractsSF)
 # now let's write this to a shapefile saved in our directory 
 st_write(tractsSF, here("data", "sf_bay_med_income.shp"),
          append = FALSE)
+
+# next we'll extract 
 ```
 
-
-
-## Read in housing density data you downloaded 
+### Read in housing density data 
 This is an example of how to work with a shapefile you downloaded from the Internet. This data is publicly available from the Silvis lab. 
 ```{r}
 
@@ -104,35 +123,69 @@ bay_housing <- ca_housing %>% dplyr::filter(substr(BLK20, 1, 5) # this is housin
                                                   "06081", "06085"))
 ```
 
+### Read in CalEnviroScreen data
+We downloaded the CalEnviroScreen data from their website and uploaded it to the Schell Lab Drive. This is in .gdb format, but works similarly to shapefiles. 
 
-## Read in NDVI data 
-Another example of data you downloaded from the internet, but this time from the Schell lab Drive! This NDVI raster layer is at a 30m resolution and was downloaded using code from Google Earth Engine. It is a composite of summer season NDVI in 2020 in the Bay area, with cloud cover removed. Note that this data may not fit all NDVI uses, so exercise caution before using it in your study! 
+
+```{r}
+
+```
+
+
+### Rasters 
+Awesome, we've learned how to read in and work with shapefiles! Now we can load some remote sensing variables in the form of rasters. These often come in the form of .tif or .img files. We can load these with the terra package. Older resources you find online might use the raster package, but it has since been deprecated. 
+
+Common issues when working with rasters are: pixel size, projection, and extent. We also have to worry about projection and extent for shapefiles. It's especially important to keep track of these things when working in R, because you don't get as many opportunities to see what you are doing as in programs like ArcGIS. We will NOT cover how to mask water in this tutorial (e.g. apply an ocean mask), but you may also need to do this in study areas such as in the Bay.
+
+Briefly: if you want to combine multiple rasters together in one ‘stack’ for analysis, these typically need to be at the same spatial extent and resolution. Since we are only extracting values of these rasters separately, we just need to ensure that these are in the same projection of our points (WGS84 in this example). There are literally hundreds of projections and many more are more suited for local analysis (e.g. WGS84, NAD83 for United States, Lambert Equal Area for dynamically local studies, etc, even the butterfly projection). 
+
+Keep in mind that the data we work with below are static variables that change on longer timescales (e.g. years). Annotating and obtaining spatio-temporally dynamic remote sensing products is outside of the scope of this tutorial. This includes things such as daily NDVI, temperature, precipitation, nightlights. Things like daily temperature and NDVI arel important and widely used variables for wildlife ecology in particular (e.g. niches don’t exist in 1D in the wild, and reviewers may ask for environmental variables when reviewing our papers which use a lot of anthropogenic variables).
+
+For the rasters, we'll also work on creating buffers around our camera trap points to calculate averages . This is actually simpler with rasters than with shapefiles, as you have to have to decide whether to rasterize shapefiles before calculating a buffer, which introduces another layer of complexity. 
+
+### Read in NDVI data 
+
+The first raster we'll work with is another example of data you downloaded from the internet, but this time from the Schell lab Drive! This NDVI raster layer is at a 30m resolution and was downloaded using code from Google Earth Engine. It is a composite of summer season NDVI in 2020 in the Bay area, with cloud cover removed. Note that this data may not fit all NDVI uses, so exercise caution before using it for your research! 
+
 ```{r}
 
 # read in the raster 
 ndvi_bay <- rast(here("data", "YH_NDVI2020_OACA-30-3857.TIF")) %>% 
- project("EPSG:32611") # put it in the right proj  -- note that this is a DIFFERENT function than we used for the sfs 
+ project("EPSG:32611") # put it in the right proj  -- note that this is a DIFFERENT function than we used for the sfs, from terra package 
 
 
 ```
 
-## Read in impervious surface data 
+## Additional raster layers: All NLCD, NLCD impervious surface 
 
-```{r}
+Here we have a few other raster data sets that we won't focus on in the main tutorial because they're so large and we didn't upload cropped versions of them. However, it's still extremely useful to learn how to work with these large data setts. In this section we'll make a small trick which is to crop our rasters to the area we are working on. 
 
-```
 
-## Read in CalEnviroScreen data
-```{r}
-
-```
-
-## Let's make some nice plots! 
-We'll use our camera points + income data 
+### Read in NLCD data 
+Plot the NLCD first to see its all of the USA. This may be overkill and take up precious RAM resources on our machines (file is (~3.3 GB). If you have a slower or older machine, skip the plotting function.
 ```{r}
 
 ```
 
 
+### Read in NLCD impervious surface data 
+The link we provided is for the entire U.S. and is 24GB (!) so we'll make sure to crop it to our study area.
 
-Next time we'll learn how to bring it all together and calculate values for our sites based on the data we read in! 
+```{r}
+
+```
+
+
+### All NLCD data 
+
+### Other potential data sets 
+
+Things we didn't cover in this tutorial include elevation data, Human Footprint Index, and things like iNaturalist or OpenStreetMaps data. But now you have the skills to download and work with these datasets! Note: to download elevation products you can simply Google SRTM download. This can come anywhere between 10m-90m depending on the extent of the product and the detail you may need. There is also airplane orthophoto imagery you could get for 1m2 elevation products!
+
+```{r}
+
+```
+
+
+
+That's it for part 1 -- next time we'll work on rasterizing shapefiles to extract buffer from them in the same way as we did for the rasters, as well as making pretty maps in ggplot! 
