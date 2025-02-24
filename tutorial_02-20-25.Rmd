@@ -106,14 +106,12 @@ bay_housing <- ca_housing %>% dplyr::filter(substr(BLK20, 1, 5) # this is housin
 
 
 ## Read in NDVI data 
-Another example of data you downloaded from the internet, but this time from the Schell lab Drive! This NDVI raster layer is at a 30m resolution and was downloaded using code from Google Earth Engine. It is a composite of summer season NDVI in 2020 in the Bay area, with cloud cover removed. 
+Another example of data you downloaded from the internet, but this time from the Schell lab Drive! This NDVI raster layer is at a 30m resolution and was downloaded using code from Google Earth Engine. It is a composite of summer season NDVI in 2020 in the Bay area, with cloud cover removed. Note that this data may not fit all NDVI uses, so exercise caution before using it in your study! 
 ```{r}
 
 # read in the raster 
 ndvi_bay <- rast(here("data", "YH_NDVI2020_OACA-30-3857.TIF")) %>% 
  project("EPSG:32611") # put it in the right proj  -- note that this is a DIFFERENT function than we used for the sfs 
-
-
 
 
 ```
@@ -124,6 +122,17 @@ ndvi_bay <- rast(here("data", "YH_NDVI2020_OACA-30-3857.TIF")) %>%
 
 ```
 
+## Read in CalEnviroScreen data
+```{r}
+
+```
+
 ## Let's make some nice plots! 
+We'll use our camera points + income data 
+```{r}
+
+```
+
+
 
 Next time we'll learn how to bring it all together and calculate values for our sites based on the data we read in! 
