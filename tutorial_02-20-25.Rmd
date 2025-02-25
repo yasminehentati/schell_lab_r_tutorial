@@ -45,7 +45,10 @@ First we'll read in our .csv and turn it into a spatial format R can work with (
 # read in data 
 all_sites <- read_csv(here("data", "eastbay_sites.csv")) %>% 
   slice (1:72) %>% # keep only rows with data
-  select(1:17) # keep only columns we might need
+  select(1:17) %>% # keep only columns we might need 
+  rename("Name" = "Site Names")
+
+
 ```
 
 Let's convert this dataframe to a spatial SF object and plot it using mapview.
@@ -123,14 +126,6 @@ bay_housing <- ca_housing %>% dplyr::filter(substr(BLK20, 1, 5) # this is housin
                                                   "06081", "06085"))
 ```
 
-### Read in CalEnviroScreen data
-We downloaded the CalEnviroScreen data from their website and uploaded it to the Schell Lab Drive. This is in .gdb format, but works similarly to shapefiles. 
-
-
-```{r}
-
-```
-
 
 ### Rasters 
 Awesome, we've learned how to read in and work with shapefiles! Now we can load some remote sensing variables in the form of rasters. These often come in the form of .tif or .img files. We can load these with the terra package. Older resources you find online might use the raster package, but it has since been deprecated. 
@@ -187,5 +182,213 @@ Things we didn't cover in this tutorial include elevation data, Human Footprint 
 ```
 
 
+## Creating buffers around data sets 
+Next we'll learn how to create buffers around our camera points, which will allow us to actually conduct analyses with our spatial data. Here we'll read in the data a built in function (though you could read it in and then extract the data separately). We often don't really want to focus on a single camera location, but rather get conditions around a specific buffer for all of our sites. In this case we will create a 1000m buffer and get the mean value of several US census based metrics.
 
-That's it for part 1 -- next time we'll work on rasterizing shapefiles to extract buffer from them in the same way as we did for the rasters, as well as making pretty maps in ggplot! 
+
+### Income data 
+Here we have a handy function to calculate 1000m buffers around our camera points with multiple tidycensus variables. This function will give you the average population and housing density per square kilometer and print out a graph of the distribution of these variables. We'll try out different variables than the one we used above.
+```{r}
+
+pop_housing_density <- function(sf, buffer_size)
+  {
+
+# Download Population and Housing Data
+state_pop_age <- get_acs(
+  state = 'CA',
+  geography = "block group",
+  variables = c(
+    pop = "B01003_001",       # Total Population
+    housing = "B25001_001"    # Total Housing Units
+  ),
+  geometry = TRUE,
+  year = 2020,
+  output = "wide"
+)
+
+# Calculate Population and Housing Density -- square kilometers
+state_pop_age_density <- state_pop_age %>%
+  mutate(
+    area_sqkm = st_area(geometry) / 1e6,          # Convert area to square kilometers
+    pop_density = as.numeric(popE / area_sqkm),              # Population density (people per sq km)
+    housing_density = as.numeric(housingE / area_sqkm)       # Housing density (units per sq km)
+  )
+
+p_sf = df %>% st_as_sf(coords = c('Long', 'Lat'), crs = st_crs(4326))  %>% st_transform(st_crs(state_pop_age_density))
+
+# Spatial join point locations and income
+p_sf_pop_age_density = st_join(p_sf, state_pop_age_density)
+
+
+if(
+  is.na(buffer_size)
+){
+
+  col_pal = c('#046C9A', 'bisque3')
+
+  ggplot_housing_density = ggplot() +
+    geom_density(aes(housing_density,
+                     fill = "Housing density across sites"),
+                 alpha = .2,
+                 data = p_sf_pop_age_density, linewidth = 0.8)  +
+    geom_density(aes(housing_density, fill = "Background Housing density"), alpha = .2, data = state_pop_age_density, linewidth = 0.8) +
+    ggtitle('UWIN \n across housing density of census tracts ') +
+    scale_fill_manual(values = col_pal) + theme_classic() + ylab('Sampling density') + xlab('Housing density') +
+    theme(axis.text.x = element_text(face = "bold", size = 16 ,color='black'),
+          axis.title.x = element_text(face = "bold", size = 16 ,color='black'),
+          axis.text.y = element_text(face = "bold", size = 16 ,color='black'),
+          axis.title.y = element_text(face = "bold", size = 16 ,color='black')) # +
+  # theme(legend.position="none") # Remove legend
+
+  print(ggplot_housing_density)
+
+
+  return(p_sf_pop_age_density)
+}
+
+
+if(
+  !is.na(buffer_size)
+){
+  df_sf_buffer <- p_sf %>%
+    st_buffer(dist = buffer_size) # For example 1000m buffer
+
+  buffered_point_joined_pop_age_density <- st_join(
+    df_sf_buffer,
+    state_pop_age_density,
+    join = st_intersects,
+    left = FALSE)
+
+
+  # Calculate the Mean Pop Density and Housing Density Within Each Buffer
+  mean_pop_house_d_buff_p <- buffered_point_joined_pop_age_density %>%
+    group_by(Name) %>%
+    summarize(mean_housing_density = mean(housing_density, na.rm = TRUE),
+              mean_pop_density = mean(pop_density, na.rm = TRUE))
+
+  df_sf_w_mean_pop_house_buf <- df %>%
+    left_join(mean_pop_house_d_buff_p, by = "Name") |>
+    # Now to get it back to our original data framer annotate the mean income age and provide the size of the buffer
+    dplyr::select("Name", mean_pop_density, mean_housing_density) |>
+    mutate(buffer_size = paste0(buffer_size))
+
+  col_pal = c('#046C9A', 'bisque3')
+
+  ggplot_housing_density = ggplot() +
+    geom_density(aes(mean_housing_density,
+                     fill = "Housing density across UWIN"),
+                 alpha = .2,
+                 data = df_sf_w_mean_pop_house_buf, linewidth = 0.8, fill = '#046C9A')  +
+    geom_density(aes(housing_density, fill = "Background Housing density"), alpha = .2, fill = 'bisque3', data = state_pop_age_density, linewidth = 0.8) +
+    ggtitle(paste0('UWIN \n across housing density of census tracts , buffer size = ', buffer_size)) +
+    scale_fill_manual(values = col_pal) + theme_classic() + ylab('Sampling density') + xlab('Housing density') +
+    theme(axis.text.x = element_text(face = "bold", size = 16 ,color='black'),
+          axis.title.x = element_text(face = "bold", size = 16 ,color='black'),
+          axis.text.y = element_text(face = "bold", size = 16 ,color='black'),
+          axis.title.y = element_text(face = "bold", size = 16 ,color='black')) # +
+  # theme(legend.position="none") # Remove legend
+
+  print(ggplot_housing_density)
+
+  return(df_sf_w_mean_pop_house_buf)
+}
+
+}
+
+uwin_sf_sf_pop_hous_dens_1000m =
+  pop_housing_density(all_sites, 1000) |> dplyr::select(-buffer_size)
+
+
+# here we'll input our sf that we made above into the function and specify the buffer size 
+```
+
+### CalEnviroScreen data 
+
+We haevn't read in CalEnviroScreen yet, but now that we have the hang of the process we can speed it up a bit. We downloaded the CalEnviroScreen data from their website and uploaded it to the Schell Lab Drive. This is in .gdb format, but works similarly to shapefiles. 
+```{r}
+
+cenv <- st_read(here("data", "calenviroscreen40gdb_F_2021.gdb", "calenviroscreen40gdb_F_2021.gdb") %>% 
+  dplyr::select(
+    Tract, ZIP, Population, CIscore, CIscoreP, PM2_5, PM2_5_Pctl,
+    Pesticides, Pesticides_Pctl, Tox_Releases, Tox_Releases_Pctl,
+    Traffic, Traffic_Pctl,
+    Solid_Waste, Solid_Waste_Pctl, Pollution, PollutionScore,
+    Pollution_Pctl, Poverty, Poverty_Pctl,
+    HousBurd, HousBurd_Pctl,
+    ApproxLoc, Shape_Area, County) %>% 
+    
+    st_as_sf(coords = c('Long', 'Lat'), crs = "EPSG:4326"))  %>%
+  st_transform(st_crs("EPSG:32611"))
+  
+# Inputs are a data frame, calenviroscreen, buffer size
+get_cenv = function(points, cenv,  buffer_size=NA){
+# cenv: Cal Enviro Screen GDB 
+  # points is camera sf 
+  # buffer_size in meters
+# cenv_col_name: Cal Enviroscreen column name
+  
+
+   # If no buffer, return
+   if(
+     is.na(buffer_size)
+   ){
+     # Spatial join point locations and income
+     p_sf_cenv = st_join(p_sf, cenv)
+     return(p_sf_cenv)
+   }
+   
+   # If buffer:
+   if(
+     !is.na(buffer_size)
+   ){
+     df_sf_buffer <- p_sf %>%
+       st_buffer(dist = buffer_size) # For example 1000m buffer
+     
+     buffered_point_joined_cenv <- st_join(
+       df_sf_buffer,
+       cenv, 
+       join = st_intersects,
+       left = FALSE)
+     
+     # Calculate the Mean Cenv Variables scores Within Each Buffer
+     # Using total scores, not percentiles
+     mean_cenv_buff_p <- buffered_point_joined_cenv %>%
+       group_by(Name) %>%
+       summarize(mean_CIscore = mean(CIscore, na.rm = TRUE),
+                 mean_PM2_5 = mean(PM2_5, na.rm = TRUE),
+                 mean_Pesticides = mean(Pesticides, na.rm = TRUE),
+                 mean_Tox_Releases = mean(Tox_Releases, na.rm = TRUE),
+                 mean_Traffic = mean(Traffic, na.rm = TRUE),
+                 mean_Solid_Waste = mean(Solid_Waste, na.rm = TRUE),
+                 mean_Pollution = mean(Pollution, na.rm = TRUE),
+                 mean_Poverty = mean(Poverty, na.rm = TRUE),
+                 mean_HousBurd = mean(HousBurd, na.rm = TRUE)
+                 
+                 )
+     
+     df_sf_w_mean_cenv_buf <- df %>%
+       left_join(mean_cenv_buff_p, by = "Name") |>
+       # Now to get it back to our original data framer annotate the mean income age and provide the size of the buffer
+       # dplyr::select(Name, mean_income, mean_age) |> 
+       mutate(buffer_size = paste0(buffer_size))
+     
+     return(df_sf_w_mean_cenv_buf)
+   }
+   
+  }
+
+df_cenv = get_cenv(uwin, cenv, 1000)
+
+names(df_cenv)
+
+df_cenv_v2 = df_cenv |> dplyr::select(Name, mean_Pesticides, mean_Tox_Releases, mean_Traffic,
+                  mean_Solid_Waste, mean_Pollution, mean_Poverty, mean_HousBurd, buffer_size)
+
+
+uwin_sf_v7 = uwin_sf_v6 |>
+  left_join(df_cenv_v2)
+
+```
+
+
+That's it for part 1 -- next time we'll work on rasterizing shapefiles to extract buffer from them in a slightly different way, as well as making pretty maps in ggplot! 
