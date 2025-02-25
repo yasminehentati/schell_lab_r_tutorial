@@ -25,7 +25,7 @@ All of these are quite straightforward except for tidycensus, for which you'll n
 
 ```{r}
 install.packages("pacman") # this package just helps us quickly install and load a lot of packages at once 
-pacman::p_load(tidycensus, sf, terra, mapview, tidyr, dplyr, readr, here, ggplot2)
+pacman::p_load(tidycensus, sf, terra, mapview, tidyr, dplyr, readr, here, ggplot2, viridis, raster,units,sp,stars,exactextractr)
 
 # see above link to get your tidycensus key and paste it below 
 census_api_key("YOUR KEY HERE",
@@ -43,10 +43,10 @@ First we'll read in our .csv and turn it into a spatial format R can work with (
 ```{r}
 
 # read in data 
-all_sites <- read_csv(here("data", "eastbay_sites.csv")) %>% 
+all_sites_df <- read_csv(here("data", "eastbay_sites.csv")) %>% 
   slice (1:72) %>% # keep only rows with data
-  select(1:17) %>% # keep only columns we might need 
-  rename("Name" = "Site Names")
+  dplyr::select(1:17) %>% # keep only columns we might need 
+  rename("Name" = "Site Names") 
 
 
 ```
@@ -54,7 +54,7 @@ all_sites <- read_csv(here("data", "eastbay_sites.csv")) %>%
 Let's convert this dataframe to a spatial SF object and plot it using mapview.
 ```{r}
 # convert the data frame into an sf format using the points columns 
-all_sites <- st_as_sf(all_sites, coords=c("Long", "Lat"), crs="EPSG:4326") #the EPSG string is simply a project code -- 4326 is the code for WGS84 lat/long, which google maps and other systems use 
+all_sites <- st_as_sf(all_sites_df, coords=c("Long", "Lat"), crs="EPSG:4326") #the EPSG string is simply a project code -- 4326 is the code for WGS84 lat/long, which google maps and other systems use 
 
 # use mapview to look at our sites and make sure everything seems to be in the right place 
 mapview(all_sites) 
@@ -100,14 +100,25 @@ tractsSF <- tractincomeCA %>% dplyr::filter(substr(GEOID, 1, 5)
                                                    "06001", "06075", # alameda, SF 
                                                    "06081", "06085")) # san mateo, san clara 
 
-# view as a map 
+# view as a map -- mapview isn't for pub quality maps, but great for visualizing and interacting with your data 
 mapview(tractsSF)
 
-# now let's write this to a shapefile saved in our directory 
+# let's make it look a bit nicer so we can get an idea of what the data actually looks like
+mapview(tractsSF, zcol = "estimate", col.regions = viridis(100))
+
+# let's change the colors and add our points on top 
+map1 <- mapview(tractsSF, zcol = "estimate", col.regions = magma(100))
+map2 <- mapview(all_sites, color = "blue", cex = 3) 
+
+map1 + map2 
+
+
+
+# now let's write this sf to a shapefile saved in our directory 
 st_write(tractsSF, here("data", "sf_bay_med_income.shp"),
          append = FALSE)
 
-# next we'll extract 
+
 ```
 
 ### Read in housing density data 
@@ -123,7 +134,18 @@ bay_housing <- ca_housing %>% dplyr::filter(substr(BLK20, 1, 5) # this is housin
                                            %in% c("06055", "06041", # same counties as before
                                                   "06095", "06013",
                                                   "06001", "06075",
-                                                  "06081", "06085"))
+                                                  "06081", "06085")) %>% 
+  dplyr::select(BLK20, WATER20, POP2020,
+                POPDEN2020, HUDEN2020,
+                Shape_Leng:geometry) # keep only attributes we need 
+
+# let's make all polygons with water (WATER20) NA so they don't get counted in the calculation (otherwise will show up at pop den 0)
+bay_housing <- bay_housing %>%
+  mutate(POPDEN2020 = ifelse(WATER20 == 1, NA, POPDEN2020))
+
+st_write(bay_housing, here("data", , "bay_urban_huden_2020.shp"),
+    append = FALSE)
+
 ```
 
 
@@ -138,64 +160,186 @@ Keep in mind that the data we work with below are static variables that change o
 
 For the rasters, we'll also work on creating buffers around our camera trap points to calculate averages . This is actually simpler with rasters than with shapefiles, as you have to have to decide whether to rasterize shapefiles before calculating a buffer, which introduces another layer of complexity. 
 
-### Read in NDVI data 
+### Read in and visualize NDVI data 
 
-The first raster we'll work with is another example of data you downloaded from the internet, but this time from the Schell lab Drive! This NDVI raster layer is at a 30m resolution and was downloaded using code from Google Earth Engine. It is a composite of summer season NDVI in 2020 in the Bay area, with cloud cover removed. Note that this data may not fit all NDVI uses, so exercise caution before using it for your research! 
+The first raster we'll work with is another example of data you downloaded from the internet, but this time from the Schell lab Drive! This NDVI raster layer is at a 30m resolution and was downloaded using code from Google Earth Engine. It is a composite of summer season NDVI in 2020 in the Bay area, with cloud cover removed. Note that this data may not fit all NDVI uses, so exercise caution before using it for your research!
 
 ```{r}
 
-# read in the raster 
+# read in the raster -- might take a miinute 
 ndvi_bay <- rast(here("data", "YH_NDVI2020_OACA-30-3857.TIF")) %>% 
  project("EPSG:32611") # put it in the right proj  -- note that this is a DIFFERENT function than we used for the sfs, from terra package 
 
 
+
+
 ```
 
-## Additional raster layers: All NLCD, NLCD impervious surface 
+## Additional (uncropped) raster layers: All NLCD, NLCD impervious surface 
 
-Here we have a few other raster data sets that we won't focus on in the main tutorial because they're so large and we didn't upload cropped versions of them. However, it's still extremely useful to learn how to work with these large data setts. In this section we'll make a small trick which is to crop our rasters to the area we are working on. 
-
+Here we have a few other raster data sets that we won't focus on the smaller steps for because they're so large and we didn't upload cropped versions of them. However, it's still extremely useful to learn how to work with these large data sets and crop them yourself. In this section we'll make a small trick which is to crop our rasters to the area we are working on. 
 
 ### Read in NLCD data 
-Plot the NLCD first to see its all of the USA. This may be overkill and take up precious RAM resources on our machines (file is (~3.3 GB). If you have a slower or older machine, skip the plotting function.
+You can plot the NLCD first to see its all of the USA. This may be overkill and take up precious RAM resources on our machines (file is (~3.3 GB). If you have a slower or older machine, skip the plotting function.
+
 ```{r}
 
+uwin_sf_buf = uwin_sf |> st_buffer(1000) 
+
+# Landcover
+CEC_map <- rast(
+  "Data/NA_NALCMS_landcover_2020v2_30m.tif"
+) 
+
+# Create a data frame with bounding box coordinates
+# Define bounding box coordinates in longitude and latitude (WGS84)
+lon_min <- min(uwin$Long)
+lon_max <- max(uwin$Long)
+lat_min <- min(uwin$Lat)
+lat_max <- max(uwin$Lat)
+
+# Create a data frame with bounding box coordinates
+bbox_df <- data.frame(
+  lon = c(lon_min, lon_max, lon_max, lon_min, lon_min),
+  lat = c(lat_min, lat_min, lat_max, lat_max, lat_min)
+)
+
+
+# Convert to an sf polygon
+bbox_sf <- st_as_sf(bbox_df, coords = c("lon", "lat"), crs = 4326) %>%
+  st_transform("EPSG:32611")
+  summarise(geometry = st_combine(geometry)) %>%
+  st_cast("POLYGON")
+
+# Get the CRS of the raster
+raster_crs <- crs(CEC_map)
+
+# Transform the bounding box to match the raster's CRS
+bbox_sf_proj <- st_transform(bbox_sf, crs = crs(CEC_map))
+
+bbox_vect <- vect(bbox_sf_proj) # convert to spatvector
+cropped_raster <- terra::crop(CEC_map, bbox_vect)
+
+cropped_raster_r = raster(cropped_raster)
+
+terra::plot(CEC_map)
+
+plot(cropped_raster)
+
+# Landcover type:
+# Lets annotate the landcpver:
+uwin_sf_landcov <- as(st_transform(st_as_sf(uwin_sf_buf),
+                                   crs(CEC_map)),'Spatial')
+uwin_sf_landcov_vect = vect(uwin_sf_landcov)
+
+uwin_sf_landcov_vect$nldc_landcover = terra::extract(
+  cropped_raster,
+  uwin_sf_landcov_vect)[,2]
+
+p_landcover = as_tibble(uwin_sf_landcov_vect) |>
+  dplyr::select(Name, nldc_landcover)
+
+# Now lets bring landcover back to our original data frame
+all_sites <- all_sites %>% left_join(p_landcover, by = 'Name')
 ```
 
 
 ### Read in NLCD impervious surface data 
+The above code uses the `raster` package, which is now deprecated and may not work in newer versions of R & RStudio. Here we'll extract buffers using a different method. This code will also print each buffer as it goes so you can make sure things look good. 
 The link we provided is for the entire U.S. and is 24GB (!) so we'll make sure to crop it to our study area.
 
 ```{r}
+imp_map <- rast(here("data", "NLCD_imp", 
+                       "nlcd_2019_impervious_descriptor_l48_20210604.img")) %>% 
+  terra::project("EPSG:32611")
 
+# initialize new col for data
+housing_dat <- st_drop_geometry(sites) %>%
+  dplyr::mutate(POPDEN2020 = NA_real_)
+
+# set buffer radius
+buffer_radius <- 1000
+
+Sys.time()
+
+for (i in 1:nrow(all_sites)) {
+  pt <- all_sites[i, ]  # iterate through sites 
+  
+  # create buffer
+  buff <- vect(st_transform(pt, crs(rast)))
+  buff_terra <- terra::buffer(buff, width = buffer_radius) 
+  
+  # need to give it a bit extra extent 
+  buff_ext <- ext(buff_terra) 
+  buff_ext <- ext(c(
+    xmin = buff_ext$xmin - 1000,
+    xmax = buff_ext$xmax + 1000,
+    ymin = buff_ext$ymin - 1000,
+    ymax = buff_ext$ymax + 1000))
+  buff_terra <- crop(buff_terra, buff_ext)
+  
+  # crop and mask the raster 
+  rast_cropped <- crop(rast, buff_terra)
+  rast_masked <- terra::mask(rast_cropped, buff_terra)
+  
+  # xxtract values within the buffer, calculate mean
+  extracted_value <- exact_extract(rast_masked, st_as_sf(buff_terra), fun = "mean", 
+                                   weights = "area")
+  housing_dat$POPDEN2020[i] <- extracted_value
+  
+  
+  # Plot the results
+  
+  p <- ggplot() +
+    geom_raster(rast_cropped, mapping = aes(x = x, y = y, fill = POPDEN2020)) +
+    #   scale_fill_manual() +
+    geom_sf(data = st_as_sf(buff_terra), fill = NA, color = "red", size = 1) +
+    geom_sf(data = sites[i,], color = "blue", size = 3) +
+    coord_sf(crs = st_crs(rast), datum = st_crs(rast)) +
+    labs(title = paste("Site:", i),
+         x = "Easting (m)", y = "Northing (m)",
+         fill = "Raster Value") +
+    theme_minimal()
+  
+  # Save the plot
+  # ggsave(filename = paste0("plots/plot_site_", i, ".png"), plot = p, width = 8, height = 6)
+  print(p) 
+  Sys.sleep(2)
+  print(i)
+}
+
+Sys.time()
 ```
 
-
-### All NLCD data 
 
 ### Other potential data sets 
 
-Things we didn't cover in this tutorial include elevation data, Human Footprint Index, and things like iNaturalist or OpenStreetMaps data. But now you have the skills to download and work with these datasets! Note: to download elevation products you can simply Google SRTM download. This can come anywhere between 10m-90m depending on the extent of the product and the detail you may need. There is also airplane orthophoto imagery you could get for 1m2 elevation products!
-
-```{r}
-
-```
-
+Things we didn't cover in this tutorial include full NLCD data, elevation data, Human Footprint Index, and things like iNaturalist or OpenStreetMaps data. But now you have the skills to download and work with these datasets and we can touch on some of them next time! Note: to download elevation products you can simply Google SRTM download. This can come anywhere between 10m-90m depending on the extent of the product and the detail you may need. There is also airplane orthophoto imagery you could get for 1m2 elevation products!
 
 ## Creating buffers around data sets 
 Next we'll learn how to create buffers around our camera points, which will allow us to actually conduct analyses with our spatial data. Here we'll read in the data a built in function (though you could read it in and then extract the data separately). We often don't really want to focus on a single camera location, but rather get conditions around a specific buffer for all of our sites. In this case we will create a 1000m buffer and get the mean value of several US census based metrics.
 
+With shapefiles, you have two choices: use the shapefile to create a buffer by averaging the values of interest in the polygons and then creating the buffer, or rasterizing the polygon and then calculating the buffer based on the average of the entire circle. The method you will want to use depends on your project and hypotheses. We'll do both methods. 
 
-### Income data 
-Here we have a handy function to calculate 1000m buffers around our camera points with multiple tidycensus variables. This function will give you the average population and housing density per square kilometer and print out a graph of the distribution of these variables. We'll try out different variables than the one we used above.
+
+### Housing data -- method 1
+Here we have a handy function to calculate 1000m buffers around our camera points with multiple tidycensus variables. This function will give you the average population and housing density (another way to get housing density!) per square kilometer and print out a graph of the distribution of these variables. We'll try out different variables than the one we used above. For this function we'll read in the data frame version of the camera points.
+
+We'll use the first method here:
 ```{r}
 
-pop_housing_density <- function(sf, buffer_size)
-  {
+pop_housing_density = function(df, buffer_size){
 
-# Download Population and Housing Data
+  df_sf = st_as_sf(SpatialPointsDataFrame(df,
+                                          coords = df[,c('Long', 'Lat')],
+                                          proj4string =CRS("+proj=longlat +datum=WGS84")
+  ))
+
+
+# Download Income, Age, Population, and Housing Data
 state_pop_age <- get_acs(
   state = 'CA',
+  # county = c("Alameda", "Contra Costa"),
   geography = "block group",
   variables = c(
     pop = "B01003_001",       # Total Population
@@ -206,7 +350,7 @@ state_pop_age <- get_acs(
   output = "wide"
 )
 
-# Calculate Population and Housing Density -- square kilometers
+# Calculate Population and Housing Density
 state_pop_age_density <- state_pop_age %>%
   mutate(
     area_sqkm = st_area(geometry) / 1e6,          # Convert area to square kilometers
@@ -215,7 +359,6 @@ state_pop_age_density <- state_pop_age %>%
   )
 
 p_sf = df %>% st_as_sf(coords = c('Long', 'Lat'), crs = st_crs(4326))  %>% st_transform(st_crs(state_pop_age_density))
-
 # Spatial join point locations and income
 p_sf_pop_age_density = st_join(p_sf, state_pop_age_density)
 
@@ -260,16 +403,16 @@ if(
     left = FALSE)
 
 
-  # Calculate the Mean Pop Density and Housing Density Within Each Buffer
+  # Calculate the Mean Median Household Income Within Each Buffer
   mean_pop_house_d_buff_p <- buffered_point_joined_pop_age_density %>%
     group_by(Name) %>%
     summarize(mean_housing_density = mean(housing_density, na.rm = TRUE),
               mean_pop_density = mean(pop_density, na.rm = TRUE))
 
-  df_sf_w_mean_pop_house_buf <- df %>%
+  df_sf_w_mean_inc_age_buf <- df %>%
     left_join(mean_pop_house_d_buff_p, by = "Name") |>
     # Now to get it back to our original data framer annotate the mean income age and provide the size of the buffer
-    dplyr::select("Name", mean_pop_density, mean_housing_density) |>
+    dplyr::select(Name, mean_pop_density, mean_housing_density) |>
     mutate(buffer_size = paste0(buffer_size))
 
   col_pal = c('#046C9A', 'bisque3')
@@ -278,7 +421,7 @@ if(
     geom_density(aes(mean_housing_density,
                      fill = "Housing density across UWIN"),
                  alpha = .2,
-                 data = df_sf_w_mean_pop_house_buf, linewidth = 0.8, fill = '#046C9A')  +
+                 data = df_sf_w_mean_inc_age_buf, linewidth = 0.8, fill = '#046C9A')  +
     geom_density(aes(housing_density, fill = "Background Housing density"), alpha = .2, fill = 'bisque3', data = state_pop_age_density, linewidth = 0.8) +
     ggtitle(paste0('UWIN \n across housing density of census tracts , buffer size = ', buffer_size)) +
     scale_fill_manual(values = col_pal) + theme_classic() + ylab('Sampling density') + xlab('Housing density') +
@@ -290,21 +433,100 @@ if(
 
   print(ggplot_housing_density)
 
-  return(df_sf_w_mean_pop_house_buf)
+  return(df_sf_w_mean_inc_age_buf)
 }
 
 }
 
+
+# here we'll input our points data frame into the function and specify the buffer size 
 uwin_sf_sf_pop_hous_dens_1000m =
-  pop_housing_density(all_sites, 1000) |> dplyr::select(-buffer_size)
+  pop_housing_density(all_sites_df, 1000) |> dplyr::select(-buffer_size)
 
 
-# here we'll input our sf that we made above into the function and specify the buffer size 
+
 ```
+
+
+### Income data -- method 2
+Here we'll use method 2 (rasterizing the shapefile and writing a loop to calculate each buffer) using the income data we got from tidycensus -- this method also prints the result of each buffer in a plot: 
+```{r}
+
+# first let's rasterize the sf from ealier 
+
+# need to create a template 
+template <- rast(ext(tractsSF), resolution=100, crs="EPSG:32611") # be careful with resolution here! 
+
+# now perform rasterize
+rast <- terra::rasterize(vect(tractsSF), template, field = "estimate")
+
+# initialize new col for data 
+income_dat <- st_drop_geometry(all_sites) %>%
+  dplyr::mutate(med_income = NA_real_)
+
+# set buffer radius
+buffer_radius <- 1000
+
+Sys.time()
+
+for (i in 1:nrow(all_sites)) {
+  pt <- all_sites[i, ]  # iterate through sites 
+  
+  # create buffer
+  buff <- vect(st_transform(pt, crs(rast)))
+  buff_terra <- terra::buffer(buff, width = buffer_radius) 
+  
+  # need to give it a bit extra extent 
+  buff_ext <- ext(buff_terra) 
+  buff_ext <- ext(c(
+    xmin = buff_ext$xmin - 1000, # this just gives the buffer a buffer so to speak 
+    xmax = buff_ext$xmax + 1000,
+    ymin = buff_ext$ymin - 1000,
+    ymax = buff_ext$ymax + 1000))
+  buff_terra <- terra::crop(buff_terra, buff_ext)
+  
+  # crop and mask the raster 
+  rast_cropped <- terra::crop(rast, buff_terra)
+  rast_masked <- terra::mask(rast_cropped, buff_terra)
+  
+  # xxtract values within the buffer, calculate mean
+  extracted_value <- exact_extract(rast_masked, st_as_sf(buff_terra), fun = "mean", 
+                                   weights = "area")
+  income_dat$med_income[i] <- extracted_value
+  
+  # Plot the results
+  
+  p <- ggplot() +
+    geom_raster(as.data.frame(rast_cropped, xy = TRUE), mapping = aes(x = x, y = y, fill = estimate)) +
+    #    scale_fill_manual() +
+    geom_sf(data = st_as_sf(buff_terra), fill = NA, color = "red", size = 1) +
+    geom_sf(data = all_sites[i,], color = "blue", size = 3) +
+    coord_sf(crs = st_crs(rast), datum = st_crs(rast)) +
+    labs(title = paste("Site:", i),
+         x = "Easting (m)", y = "Northing (m)",
+         fill = "Raster Value") +
+    theme_minimal()
+  
+  # Save the plot
+  # ggsave(filename = paste0("plots/plot_site_", i, ".png"), plot = p, width = 8, height = 6)
+  print(p) 
+  Sys.sleep(1)
+  print(i)
+}
+
+Sys.time()
+
+# Check the final results
+print(income_dat)
+
+# we won't bind this to our data set for now but you'll want to make sure to do so in a real analysis
+
+```
+
 
 ### CalEnviroScreen data 
 
-We haevn't read in CalEnviroScreen yet, but now that we have the hang of the process we can speed it up a bit. We downloaded the CalEnviroScreen data from their website and uploaded it to the Schell Lab Drive. This is in .gdb format, but works similarly to shapefiles. 
+We haevn't read in CalEnviroScreen yet, but now that we have the hang of the process we can speed it up a bit. We downloaded the CalEnviroScreen data from their website and uploaded it to the Schell Lab Drive. This is in .gdb format, but works similarly to shapefiles. We'll use method 1 here. 
 ```{r}
 
 cenv <- st_read(here("data", "calenviroscreen40gdb_F_2021.gdb", "calenviroscreen40gdb_F_2021.gdb") %>% 
@@ -318,7 +540,7 @@ cenv <- st_read(here("data", "calenviroscreen40gdb_F_2021.gdb", "calenviroscreen
     ApproxLoc, Shape_Area, County) %>% 
     
     st_as_sf(coords = c('Long', 'Lat'), crs = "EPSG:4326"))  %>%
-  st_transform(st_crs("EPSG:32611"))
+  st_transform(crs("EPSG:32611"))
   
 # Inputs are a data frame, calenviroscreen, buffer size
 get_cenv = function(points, cenv,  buffer_size=NA){
@@ -377,7 +599,7 @@ get_cenv = function(points, cenv,  buffer_size=NA){
    
   }
 
-df_cenv = get_cenv(uwin, cenv, 1000)
+df_cenv = get_cenv(all_sites, cenv, 1000)
 
 names(df_cenv)
 
@@ -390,5 +612,39 @@ uwin_sf_v7 = uwin_sf_v6 |>
 
 ```
 
+### NDVI data
+NDVI is a bit special because you have to decide how exactly you're going to classify the data. Below is code adapted from Travis Gallo that calculates a proportion of a buffer that is covered in vegetation classified as NDVI 0.6 or higher. Use caution before using this -- the values you'd want to use as a cutoff may differ markedly based on your study area, and you may not want to use a proportion at all! 
 
-That's it for part 1 -- next time we'll work on rasterizing shapefiles to extract buffer from them in a slightly different way, as well as making pretty maps in ggplot! 
+```{r}
+
+# calculate the proportion of a site that is covered in vegetation (greater than 0.6)
+
+# initialize a data frame to store results
+prop_ndvi_greater0.6 <- data.frame(site = integer(), proportion_vegetation = numeric())
+
+# loop through each site
+for (i in 1:nrow(all_sites)) {
+  # Create a buffer for the current site
+  buffered_site <- terra::buffer(vect(all_sites[i, ]), width = 1000)  # Adjust buffer width as needed
+  
+  # Extract values from the NDVI raster using the buffered site
+  buffered_values <- terra::extract(ndvi_bay, buffered_site, df = TRUE)
+  
+  # Calculate the proportion of NDVI values greater than 0.5
+  if (nrow(buffered_values) > 0) {
+    # Replace NA values with 0 for the calculation
+    ndvi_values <- ifelse(is.na(buffered_values[, 2]), 0, buffered_values[, 2])
+    
+    # Calculate the proportion
+    proportion_vegetation <- sum(ndvi_values > 0.6) / length(ndvi_values)
+  } else {
+    proportion_vegetation <- NA  # Handle case where no values are extracted
+  }
+  
+# Store the results
+  prop_ndvi_greater0.6 <- rbind(prop_ndvi_greater0.6, data.frame(site = all_sites[i, ]$Name, proportion_vegetation = proportion_vegetation))
+}
+```
+
+
+That's it for part 1 -- next time we'll work on making pretty maps in ggplot! 
