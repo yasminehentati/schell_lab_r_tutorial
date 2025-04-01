@@ -53,13 +53,14 @@ all_sites_df <- read_csv(here("data", "eastbay_sites.csv")) %>%
 
 Let's convert this dataframe to a spatial SF object and plot it using mapview.
 ```{r}
+
 # convert the data frame into an sf format using the points columns 
 all_sites <- st_as_sf(all_sites_df, coords=c("Long", "Lat"), crs="EPSG:4326") #the EPSG string is simply a project code -- 4326 is the code for WGS84 lat/long, which google maps and other systems use 
 
 # use mapview to look at our sites and make sure everything seems to be in the right place 
 mapview(all_sites) 
 
-# transform all_sites to UTM with st_transform 
+# transform all_sites to UTM with st_transform
 all_sites <- all_sites %>% st_transform("EPSG:32611") # EPSG code for WGS84 UTM zone 11 (california)
 
 # take a look at it again
@@ -80,6 +81,7 @@ The link in the first packages section above is a great overall tutorial if you 
 # load in ACS 2019 variables 
 v19 <- load_variables(2019, "acs5", cache = TRUE)
 
+
 # now load in sf  of california census tracts 
 # with median household income as variable of interest
 tractincomeCA <- get_acs(state = "CA", 
@@ -91,6 +93,7 @@ tractincomeCA <- get_acs(state = "CA",
 # take a look at the data set
 glimpse(tractincomeCA)
 class(tractincomeCA)
+head(tractincomeCA)
 
 # now let's only keep census tracts we want so the file isn't huge -- let's do the entire SF bay area in case we need the rest of this data one day
 tractsSF <- tractincomeCA %>% dplyr::filter(substr(GEOID, 1, 5) 
@@ -117,8 +120,6 @@ map1 + map2
 # now let's write this sf to a shapefile saved in our directory 
 st_write(tractsSF, here("data", "sf_bay_med_income.shp"),
          append = FALSE)
-
-
 ```
 
 ### Read in housing density data 
@@ -130,7 +131,7 @@ bay_housing <- st_read(here("data", "CA_wui_block_1990_2020_change_v4.shp")) %>%
 
 
 # filter to only bay area counties
-bay_housing <- ca_housing %>% dplyr::filter(substr(BLK20, 1, 5) # this is housing density by block for 2020 
+bay_housing <- bay_housing %>% dplyr::filter(substr(BLK20, 1, 5) # this is housing density by block for 2020 
                                            %in% c("06055", "06041", # same counties as before
                                                   "06095", "06013",
                                                   "06001", "06075",
@@ -143,7 +144,7 @@ bay_housing <- ca_housing %>% dplyr::filter(substr(BLK20, 1, 5) # this is housin
 bay_housing <- bay_housing %>%
   mutate(POPDEN2020 = ifelse(WATER20 == 1, NA, POPDEN2020))
 
-st_write(bay_housing, here("data", , "bay_urban_huden_2020.shp"),
+st_write(bay_housing, here("data", "bay_urban_huden_2020.shp"),
     append = FALSE)
 
 ```
@@ -204,10 +205,10 @@ bbox_df <- data.frame(
   lat = c(lat_min, lat_min, lat_max, lat_max, lat_min)
 )
 
-
+?st_combine
 # Convert to an sf polygon
 bbox_sf <- st_as_sf(bbox_df, coords = c("lon", "lat"), crs = 4326) %>%
-  st_transform("EPSG:32611")
+  st_transform("EPSG:32611") %>% 
   summarise(geometry = st_combine(geometry)) %>%
   st_cast("POLYGON")
 
@@ -286,7 +287,6 @@ for (i in 1:nrow(all_sites)) {
   extracted_value <- exact_extract(rast_masked, st_as_sf(buff_terra), fun = "mean", 
                                    weights = "area")
   housing_dat$POPDEN2020[i] <- extracted_value
-  
   
   # Plot the results
   
