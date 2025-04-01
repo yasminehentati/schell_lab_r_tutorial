@@ -69,7 +69,7 @@ water <-  water %>% st_transform(crs = 4326) %>%
 
 Let's make sure our points layer is in the right projection too: 
 ```{r}
-points <- points %>% st_transform(st_crs(wa_map))
+points_wa <- points_wa %>% st_transform(st_crs(wa_map))
 
 # check
 st_crs(water) == st_crs(wa_map)
