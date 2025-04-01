@@ -26,20 +26,21 @@ pacman::p_load(extrafont, ggplot2, tidyr, dplyr, mapview, lme4, magrittr, lintr,
 ### by Diego Ellis Soto and Yasmine Hentati
 ### April 1, 2025
 
-This tutorial will walk you through some code to create a rather complicated map using ggplot 2. We'll use multiple layer types and go deep into the capabilities of ggplot2 to create this publication-ready map, and you'll learn lots of tricks that you can use in your own maps along the way!
+This tutorial will walk you through some code to create a rather complicated map using ggplot 2 that has different polygons, points, and a couple of overlays. We'll use multiple layer types and go deep into the capabilities of ggplot2 to create this publication-ready map, and you'll learn lots of tricks that you can use in your own maps along the way!
 
 First we'll read in our camera trap point data.
 ```{r}
 #### load in camera locations
-points <- st_read(here("data", "plot_data", "points_wa.shp"))
-points <- st_as_sf(points)
+points_wa <- st_read(here("data", "plot_data", "points_wa.shp"))
+points_wa <- st_as_sf(points_wa)
 ```
 
 
-Next we'll load in some polygon data: our state, county, and census tract shapefiles.
+Next we'll load in some polygon data: our county level and census tract shapefiles of Washington. We'll also reproject and crop them to our study area -- there are many ways you can do this, but here we'll use st_crop. This is a great way to speed up your plotting code by making sure you're only working with the size of layers you need. 
+```{r}
 
-wa_map <- st_read(here("data", "figure_data", "tl_2016_53_cousub.shp")) 
-wa_tract <- st_read(here("data", "figure_data", "tract20.shp"))
+wa_map <- st_read(here("data", "plot_data", "tl_2016_53_cousub.shp")) 
+wa_tract <- st_read(here("data", "plot_data", "tract20.shp"))
 
 wa_map <- wa_map %>%  st_transform(crs = 4326) %>% 
   st_crop(c(xmin = -125.5, xmax = -116, ymin = 46.5, ymax = 49))
@@ -47,31 +48,47 @@ wa_map <- wa_map %>%  st_transform(crs = 4326) %>%
 wa_tract <- wa_tract %>%  st_transform(crs = 4326) %>% 
   st_crop(c(xmin = -125.5, xmax = -116, ymin = 46.5, ymax = 49))
 
+# quick mapview to make sure it looks right 
 mapview(wa_map)
+```
+
+Next we'll read in some water data. This is really useful when plotting regions with lots of large water bodies (e.g. Puget Sound, Bay Area) as your maps will look weird without it! Unfortunately these types of files tend to be quite large and will slow things down a bit. 
+```{r}
+
 # add water
-water <- st_read(here("data", "figure_data", 
+water <- st_read(here("data", "plot_data", 
                       "DNR_Hydrography_-_Water_Bodies_-_Forest_Practices_Regulation.shp")) 
 
 sf_use_s2(FALSE)
 
-# crop to our map area 
+# crop the layer to our map area 
 water <-  water %>% st_transform(crs = 4326) %>% 
   st_crop(c(xmin = -125.5, xmax = -117, ymin = 46.5, ymax = 49))
 
-# let's put everything in the same proj 
+```
 
+Let's make sure our points layer is in the right projection too: 
+```{r}
 points <- points %>% st_transform(st_crs(wa_map))
+
+# check
 st_crs(water) == st_crs(wa_map)
+```
 
-# clip counties shapefile to water 
+Now we're going to clip two layers using the boundary of another layer. ms_erase from the package mapshaper is pretty fast when working with spatially large files or files with lots of features.
 
+```{r}
+# clip counties shapefile to water -- these two will make up our "base" map
 wa_crop <- ms_erase(wa_map, water)
 
+# clip tract shapefile to water 
+tract_crop <- ms_erase(wa_tract, water)
 
- # for now we'll be lazy and manually erase the lines in the 
-# water (that line up with canadian borders) later
+```
 
 
+We're going to put a few city labels on our map, so we're going to create a data frame that has the name and GPS location of each of these cities. 
+```{r}
 # add cities 
 wacities <- data.frame(state = rep("Washington", 6), 
                        city = c("Seattle", "Tacoma", 
@@ -81,9 +98,12 @@ wacities <- data.frame(state = rep("Washington", 6),
                                48.117657,46.92),
                        long = c(-122.321388,-122.454775,-122.898329,
                                 -122.216018,-123.431504, -122.25))
-wacities                       
-# add US map
+wacities  
+```
+      
+Next we need to add a map of the entire U.S. to put in the corner of our plot. There are R packages that will let us load these types of maps directly without having to search for and download them! Here we'll use usmap. Similar packages also exist for global maps. 
 
+```{r}
 usmap <- plot_usmap(exclude = c("Alaska", "Hawaii"),
            fill = "antiquewhite4")  + 
  geom_rect(
@@ -96,7 +116,11 @@ usmap <- plot_usmap(exclude = c("Alaska", "Hawaii"),
     linewidth = 1
   )
 usmap
+```
 
+Here I made an attempt to create a bounding box on the US map but it didn't work. I ended up adding this bounding box in Illustrator afterwards. 
+
+```{r}
   # study area bounding box -- doesnt work
 #usmap <- plot(ne_states(country = "United States of America")) + 
  # usmap_transform(geom_rect(
@@ -109,10 +133,12 @@ usmap
  #   linewidth = 1
  # )) + 
 #  coord_sf(crs = st_crs(water))
+```
 
 
+Next we'll create our large "base" map of the greater study area. This is where ggplo comes in. This map will also have bounding boxes that will highlight the area for the zoomed-in overlays we're going to make.
 
-# make the big WA map
+```{r}
 washington <- ggplot(data = wa_crop) +
   geom_sf(fill = "antiquewhite4", color = NA) +
   #      geom_sf(data = water, fill = "alice blue", color = gray(.2)) + 
@@ -165,19 +191,16 @@ washington <- ggplot(data = wa_crop) +
     linewidth = 1
  ) 
 
+washington
+```
 
 
-# clip tract shapefile to water 
-tract_crop <- ms_erase(wa_tract, water)
+Next we'll read in some environmental health map data to plot in our overlays. We're going to manipulate the variables in it a bit to create a nice scaled gradient for our map. Note that you can often manipulate sf files the same way you would a data frame. 
 
-# read in shapefiles 
-
-envdat <- st_read(here("data", "env_health_data", "env_health_all_KP.shp")) %>%
+```{r}
+envdat <- st_read(here("data", "plot_data", "env_health_all_KP.shp")) %>%
   st_transform(st_crs(water))
 
-
-#now lets make one big dataframe so we can create percentiles for our map 
-colnames(envdat)
 
 # scaling 
 pollutants <- envdat %>%
@@ -222,11 +245,15 @@ pollutants <- pollutants %>%
   mutate(EXPOSURE = (PM25_PCT + DIESEL_PCT +  TOXIC_PCT + OZONE_PCT) / 4) %>%
   mutate(RISK = (LEAD_PCT + PRMP_PCT + PTSDF_PCT + PNPL_PCT) / 4) 
 
-## read in points 
-points_wa <- st_read(here("data", "cameras", "points_wa.shp"))
+
+```
 
 
-###########
+Next we'll make our overlays of our study sites: Seattle and Tacoma. We'll use the pollutants layer we just made, as well as our camera trap points, to do this.
+
+Here's the code for our Tacoma camera transect:
+```{r}
+
 # make study site map - tacoma 
 TAWA <- ggplot(data = pollutants) + 
   geom_sf(
@@ -263,6 +290,11 @@ TAWA <- ggplot(data = pollutants) +
   ) + theme(legend.position = "none")
 
 TAWA
+```
+
+
+Now the same for Seattle: 
+```{r}
 
 # make study site map - seattle 
 
@@ -294,13 +326,13 @@ SEWA <- pollutants %>%
   theme(legend.position = "none")
 
 SEWA
+```
 
-
-pollutants$RISK
+Now we're going to extract our legend from one of our overlay maps. I ran into issues with get_legend from cowplot, which is a packge that allows you to compile multiple ggplots into one, so I used code someone else posted on GitHub as a fix. This is pretty complicated and you likely won't need to use it unless you're creating a similar map with multiple overlays! 
+```{r}
 
 # get the legend 
 
-library(gridGraphics)
 # using custom function from github issue as cowplot get_legend isnt working: 
 # https://github.com/wilkelab/cowplot/issues/202
 
@@ -333,11 +365,20 @@ legend <- get_legend_35(
 ) 
 warnings()
 
+```
 
+
+We can add arrows on our plot that point from the base map to our overlays, but we need to manually create those arrows by giving them locations on our map. You'll likely have to play around with this a bit. 
+
+```{r}
 # create arrows for bigger map 
 arrowA <- data.frame(x1 = 11, x2 = 16, y1 = 10.5, y2 = 14.5)
 arrowB <- data.frame(x1 = 8.5, x2 = 15, y1 = 7.5, y2 = 5.5)
+```
 
+Now we're ready to plot everything together using cowplot! Make sure to make your plot box large  to see it with the correct ratios. 
+
+```{r}
 
 # final plot 
 ggdraw(xlim = c(0, 28), ylim = c(0, 30)) +
@@ -351,4 +392,7 @@ ggdraw(xlim = c(0, 28), ylim = c(0, 30)) +
  #              arrow = arrow(), lineend = "round") +  
   draw_plot(legend, x = 14, y = 0, width = 2, height = 2) 
 
-ggsave(filename = "map_high_res.bmp", path = here("plots"), width = 25, height = 25, device='bmp', dpi=300)
+ggsave(filename = "map_high_res.bmp", path = here(), width = 25, height = 25, device='bmp', dpi=300)
+```
+
+
